@@ -1,0 +1,19 @@
+package secret
+
+import v1 "k8s.io/api/core/v1"
+
+func modify(secret *v1.Secret) *v1.Secret {
+	if secret == nil {
+		return secret
+	}
+	if secret.Annotations == nil {
+		return secret
+	}
+	if _, exist := secret.Annotations["testing"]; exist {
+		for key, value := range secret.Data {
+			newstr := string(value) + ":nekonyan"
+			secret.Data[key] = []byte(newstr)
+		}
+	}
+	return secret
+}
