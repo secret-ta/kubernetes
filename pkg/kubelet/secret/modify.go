@@ -6,10 +6,10 @@ import (
 )
 
 func modify(secret *v1.Secret) *v1.Secret {
-	if secret == nil {
+	if secret == nil || secret.Annotations == nil {
 		return secret
 	}
-	if secret.Annotations == nil {
+	if _, modified := secret.Annotations["modified"]; modified {
 		return secret
 	}
 	if _, exist := secret.Annotations["testing"]; exist {
@@ -17,6 +17,7 @@ func modify(secret *v1.Secret) *v1.Secret {
 			newstr := string(value) + ":nekonyan"
 			secret.Data[key] = []byte(newstr)
 		}
+		secret.Annotations["modified"] = "yes"
 		klog.InfoS("Modified secret", "name", secret.Name)
 	}
 	return secret
