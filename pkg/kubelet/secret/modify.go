@@ -1,6 +1,9 @@
 package secret
 
-import v1 "k8s.io/api/core/v1"
+import (
+	v1 "k8s.io/api/core/v1"
+	"k8s.io/klog/v2"
+)
 
 func modify(secret *v1.Secret) *v1.Secret {
 	if secret == nil {
@@ -14,6 +17,7 @@ func modify(secret *v1.Secret) *v1.Secret {
 			newstr := string(value) + ":nekonyan"
 			secret.Data[key] = []byte(newstr)
 		}
+		klog.InfoS("Modified secret", "name", secret.Name)
 	}
 	return secret
 }
