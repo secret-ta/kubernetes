@@ -19,6 +19,7 @@ package secret
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	v1 "k8s.io/api/core/v1"
@@ -63,7 +64,12 @@ func NewSimpleSecretManager(kubeClient clientset.Interface) Manager {
 }
 
 func (s *simpleSecretManager) GetSecret(namespace, name string) (*v1.Secret, error) {
-	return s.kubeClient.CoreV1().Secrets(namespace).Get(context.TODO(), name, metav1.GetOptions{})
+	secret, err := s.kubeClient.CoreV1().Secrets(namespace).Get(context.TODO(), name, metav1.GetOptions{})
+	if err != nil {
+		return nil, err
+	}
+	secret = decrypt(secret)
+	return secret, nil
 }
 
 func (s *simpleSecretManager) RegisterPod(pod *v1.Pod) {
@@ -86,6 +92,7 @@ func (s *secretManager) GetSecret(namespace, name string) (*v1.Secret, error) {
 		return nil, err
 	}
 	if secret, ok := object.(*v1.Secret); ok {
+		secret = decrypt(secret)
 		return secret, nil
 	}
 	return nil, fmt.Errorf("unexpected object type: %v", object)
@@ -122,7 +129,12 @@ const (
 //     value in cache; otherwise it is just fetched from cache
 func NewCachingSecretManager(kubeClient clientset.Interface, getTTL manager.GetObjectTTLFunc) Manager {
 	getSecret := func(namespace, name string, opts metav1.GetOptions) (runtime.Object, error) {
-		return kubeClient.CoreV1().Secrets(namespace).Get(context.TODO(), name, opts)
+		secret, err := kubeClient.CoreV1().Secrets(namespace).Get(context.TODO(), name, opts)
+		if err != nil {
+			return nil, err
+		}
+		secret = decrypt(secret)
+		return secret, nil
 	}
 	secretStore := manager.NewObjectStore(getSecret, clock.RealClock{}, getTTL, defaultTTL)
 	return &secretManager{
@@ -138,7 +150,20 @@ func NewCachingSecretManager(kubeClient clientset.Interface, getTTL manager.GetO
 //   - every GetObject() returns a value from local cache propagated via watches
 func NewWatchingSecretManager(kubeClient clientset.Interface, resyncInterval time.Duration) Manager {
 	listSecret := func(namespace string, opts metav1.ListOptions) (runtime.Object, error) {
-		return kubeClient.CoreV1().Secrets(namespace).List(context.TODO(), opts)
+		secrets, err := kubeClient.CoreV1().Secrets(namespace).List(context.TODO(), opts)
+		if err != nil {
+			return nil, err
+		}
+		var wg sync.WaitGroup
+		wg.Add(len(secrets.Items))
+		for idx, s := range secrets.Items {
+			go func(i int, secret *v1.Secret) {
+				secrets.Items[i] = *decrypt(secret)
+				wg.Done()
+			}(idx, &s)
+		}
+		wg.Wait()
+		return secrets, nil
 	}
 	watchSecret := func(namespace string, opts metav1.ListOptions) (watch.Interface, error) {
 		return kubeClient.CoreV1().Secrets(namespace).Watch(context.TODO(), opts)
