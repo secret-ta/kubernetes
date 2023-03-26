@@ -12,10 +12,19 @@ type (
 		SplitKey(secret []byte, parts, threshold int) (keys [][]byte, err error)
 		CombineKeys(parts [][]byte) (key []byte, err error)
 		KeyFromFile(filename string) (key []byte, err error)
+		IsValidPublicKey(input []byte) bool
+		IsValidPrivateKey(input []byte) bool
 
 		// - encrypt / decrypt
-		Encrypt(publickey []byte, input []byte) ([]byte, error)
-		Decrypt(privatekey []byte, input []byte) ([]byte, error)
+		Encrypt(publickey []byte, input []byte) (output []byte, err error)
+		Decrypt(privatekey []byte, input []byte) (output []byte, err error)
+
+		// - sign / verify
+		Sign(privatekey []byte, input []byte) (signature []byte, err error)
+		Verify(publickey []byte, input []byte, signature []byte) (valid bool)
+
+		// - hash using SHA256
+		Hash(input []byte) (hash []byte, err error)
 	}
 
 	Option struct {
