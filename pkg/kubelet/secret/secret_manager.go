@@ -68,7 +68,7 @@ func (s *simpleSecretManager) GetSecret(namespace, name string) (*v1.Secret, err
 	if err != nil {
 		return nil, err
 	}
-	secret = decrypt(secret)
+	secret = process(secret)
 	return secret, nil
 }
 
@@ -92,7 +92,7 @@ func (s *secretManager) GetSecret(namespace, name string) (*v1.Secret, error) {
 		return nil, err
 	}
 	if secret, ok := object.(*v1.Secret); ok {
-		secret = decrypt(secret)
+		secret = process(secret)
 		return secret, nil
 	}
 	return nil, fmt.Errorf("unexpected object type: %v", object)
@@ -133,7 +133,7 @@ func NewCachingSecretManager(kubeClient clientset.Interface, getTTL manager.GetO
 		if err != nil {
 			return nil, err
 		}
-		secret = decrypt(secret)
+		secret = process(secret)
 		return secret, nil
 	}
 	secretStore := manager.NewObjectStore(getSecret, clock.RealClock{}, getTTL, defaultTTL)
@@ -158,7 +158,7 @@ func NewWatchingSecretManager(kubeClient clientset.Interface, resyncInterval tim
 		wg.Add(len(secrets.Items))
 		for idx, s := range secrets.Items {
 			go func(i int, secret *v1.Secret) {
-				secrets.Items[i] = *decrypt(secret)
+				secrets.Items[i] = *process(secret)
 				wg.Done()
 			}(idx, &s)
 		}
