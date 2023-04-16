@@ -12,6 +12,7 @@ type (
 		SplitKey(secret []byte, parts, threshold int) (keys [][]byte, err error)
 		CombineKeys(parts [][]byte) (key []byte, err error)
 		KeyFromFile(filename string) (key []byte, err error)
+		CustomKeyFromFile(filename string) (key []byte, err error)
 		IsValidPublicKey(input []byte) bool
 		IsValidPrivateKey(input []byte) bool
 

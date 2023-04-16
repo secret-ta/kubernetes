@@ -6,12 +6,18 @@ import (
 	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/pem"
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/secret-ta/k8s-ta-internal-crypto-library/shamir"
+)
+
+var (
+	ErrInvalidCustomKeyFile = errors.New("invalid custom key file")
 )
 
 func (c *cryptoImpl) KeyFromFile(filename string) ([]byte, error) {
@@ -24,6 +30,41 @@ func (c *cryptoImpl) KeyFromFile(filename string) ([]byte, error) {
 		return nil, errors.New("invalid key file")
 	}
 	return block.Bytes, nil
+}
+
+func (c *cryptoImpl) CustomKeyFromFile(filename string) ([]byte, error) {
+	b, err := os.ReadFile(filename)
+	if err != nil {
+		return nil, err
+	}
+	str := string(b)
+
+	str = strings.ReplaceAll(str, "\n", "")
+	str = strings.ReplaceAll(str, "-----BEGIN RSA PRIVATE KEY-----", "")
+	str = strings.ReplaceAll(str, "-----END RSA PRIVATE KEY-----", "")
+
+	split := strings.Split(str, ".")
+
+	if len(split) < 2 {
+		return nil, ErrInvalidCustomKeyFile
+	}
+
+	key1, err := c.base64StringToByte(split[0])
+	if err != nil {
+		return nil, ErrInvalidCustomKeyFile
+	}
+
+	key2, err := c.base64StringToByte(split[1])
+	if err != nil {
+		return nil, ErrInvalidCustomKeyFile
+	}
+
+	key, err := c.CombineKeys([][]byte{key1, key2})
+	if err != nil {
+		return nil, ErrInvalidCustomKeyFile
+	}
+
+	return key, nil
 }
 
 func (c *cryptoImpl) GeneratePublicPrivateKey() ([]byte, []byte, error) {
@@ -146,3 +187,11 @@ func (c *cryptoImpl) parsePrivateKey(input []byte) (*rsa.PrivateKey, error) {
 func (c *cryptoImpl) parsePublicKey(input []byte) (*rsa.PublicKey, error) {
 	return x509.ParsePKCS1PublicKey(input)
 }
+
+func (c *cryptoImpl) base64StringToByte(input string) ([]byte, error) {
+	return base64.StdEncoding.DecodeString(input)
+}
+
+// func (c *cryptoImpl) byteToBase64String(input []byte) string {
+// 	return base64.StdEncoding.EncodeToString(input)
+// }

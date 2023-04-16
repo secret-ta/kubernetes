@@ -18,7 +18,9 @@ package secret
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -68,7 +70,10 @@ func (s *simpleSecretManager) GetSecret(namespace, name string) (*v1.Secret, err
 	if err != nil {
 		return nil, err
 	}
-	secret = process(secret)
+	secret, err = process(secret)
+	if err != nil {
+		return nil, err
+	}
 	return secret, nil
 }
 
@@ -92,7 +97,10 @@ func (s *secretManager) GetSecret(namespace, name string) (*v1.Secret, error) {
 		return nil, err
 	}
 	if secret, ok := object.(*v1.Secret); ok {
-		secret = process(secret)
+		secret, err = process(secret)
+		if err != nil {
+			return nil, err
+		}
 		return secret, nil
 	}
 	return nil, fmt.Errorf("unexpected object type: %v", object)
@@ -133,7 +141,10 @@ func NewCachingSecretManager(kubeClient clientset.Interface, getTTL manager.GetO
 		if err != nil {
 			return nil, err
 		}
-		secret = process(secret)
+		secret, err = process(secret)
+		if err != nil {
+			return nil, err
+		}
 		return secret, nil
 	}
 	secretStore := manager.NewObjectStore(getSecret, clock.RealClock{}, getTTL, defaultTTL)
@@ -154,15 +165,34 @@ func NewWatchingSecretManager(kubeClient clientset.Interface, resyncInterval tim
 		if err != nil {
 			return nil, err
 		}
-		var wg sync.WaitGroup
+
+		var (
+			wg   sync.WaitGroup
+			errs []string
+			mtx  sync.Mutex
+		)
 		wg.Add(len(secrets.Items))
-		for idx, s := range secrets.Items {
-			go func(i int, secret *v1.Secret) {
-				secrets.Items[i] = *process(secret)
-				wg.Done()
-			}(idx, &s)
+		for idx := range secrets.Items {
+			go func(i int) {
+				defer func() {
+					wg.Done()
+				}()
+				sec, err := process(&secrets.Items[i])
+				if err != nil {
+					mtx.Lock()
+					errs = append(errs, err.Error())
+					mtx.Unlock()
+					return
+				}
+				secrets.Items[i] = *sec
+			}(idx)
 		}
 		wg.Wait()
+
+		if len(errs) > 0 {
+			return nil, errors.New(strings.Join(errs, ", "))
+		}
+
 		return secrets, nil
 	}
 	watchSecret := func(namespace string, opts metav1.ListOptions) (watch.Interface, error) {
