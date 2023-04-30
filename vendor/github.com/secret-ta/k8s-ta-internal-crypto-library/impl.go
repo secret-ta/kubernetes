@@ -2,14 +2,18 @@ package k8stainternalcryptolibrary
 
 import (
 	"crypto"
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
@@ -18,6 +22,11 @@ import (
 
 var (
 	ErrInvalidCustomKeyFile = errors.New("invalid custom key file")
+	ErrInputTooShort        = errors.New("input too short")
+)
+
+const (
+	symmetricKeyBytes = 32
 )
 
 func (c *cryptoImpl) KeyFromFile(filename string) ([]byte, error) {
@@ -98,7 +107,7 @@ func (c *cryptoImpl) Encrypt(publickey []byte, input []byte) ([]byte, error) {
 
 	encryptedBytes, err := rsa.EncryptOAEP(
 		sha256.New(),
-		rand.Reader,
+		c.randSource,
 		key,
 		input,
 		nil)
@@ -116,12 +125,106 @@ func (c *cryptoImpl) Decrypt(privatekey []byte, input []byte) ([]byte, error) {
 		return nil, fmt.Errorf("error parsing private key, error %w", err)
 	}
 
-	decryptedBytes, err := key.Decrypt(rand.Reader, input, &rsa.OAEPOptions{Hash: crypto.SHA256})
+	decryptedBytes, err := rsa.DecryptOAEP(
+		sha256.New(),
+		c.randSource,
+		key,
+		input,
+		nil)
+
 	if err != nil {
 		return nil, fmt.Errorf("error decrypting data, error %w", err)
 	}
 
 	return decryptedBytes, nil
+}
+
+// return rsa ciphertext length || rsa ciphertext || nonce length || nonce || aes ciphertext
+func (c *cryptoImpl) HybridEncrypt(publickey []byte, input []byte) ([]byte, error) {
+	publicKey, err := c.parsePublicKey(publickey)
+	if err != nil {
+		return nil, fmt.Errorf("error parsing public key, error %w", err)
+	}
+
+	symmetricKey := make([]byte, symmetricKeyBytes)
+	if _, err := io.ReadFull(c.randSource, symmetricKey); err != nil {
+		return nil, fmt.Errorf("error creating symmetric key, error %w", err)
+	}
+
+	aed, err := c.createSymmetricAESGCM(symmetricKey)
+	if err != nil {
+		return nil, err
+	}
+
+	ciphertext := make([]byte, 0)
+
+	keyCipher, err := rsa.EncryptOAEP(sha256.New(), c.randSource, publicKey, symmetricKey, nil)
+	if err != nil {
+		return nil, fmt.Errorf("error encrypting key, error %w", err)
+	}
+
+	keyCipherLenB := make([]byte, 2)
+	binary.BigEndian.PutUint16(keyCipherLenB, uint16(len(keyCipher)))
+	ciphertext = append(ciphertext, keyCipherLenB...) // put rsa encrypted symmetric key cipher length
+	ciphertext = append(ciphertext, keyCipher...)     // put rsa encrypted symmetric key
+
+	nonce := make([]byte, aed.NonceSize())
+	if _, err := io.ReadFull(c.randSource, nonce); err != nil {
+		return nil, fmt.Errorf("error creating nonce, error %w", err)
+	}
+
+	nonceLenB := make([]byte, 2)
+	binary.BigEndian.PutUint16(nonceLenB, uint16(len(nonce)))
+	ciphertext = append(ciphertext, nonceLenB...)        // put nonce length
+	ciphertext = append(ciphertext, nonce...)            // put nonce
+	ciphertext = aed.Seal(ciphertext, nonce, input, nil) // put aes encrypted input
+
+	return ciphertext, nil
+}
+
+func (c *cryptoImpl) HybridDecrypt(privatekey []byte, input []byte) ([]byte, error) {
+	if len(input) < 2 {
+		return nil, ErrInputTooShort
+	}
+
+	rsaLen := int(binary.BigEndian.Uint16(input))
+	if len(input) < rsaLen+2 {
+		return nil, ErrInputTooShort
+	}
+	keyCipher := input[2 : rsaLen+2]
+
+	rest := input[rsaLen+2:]
+	if len(rest) < 2 {
+		return nil, ErrInputTooShort
+	}
+	nonceLen := int(binary.BigEndian.Uint16(rest))
+	nonce := rest[2 : nonceLen+2]
+	if len(rest) < nonceLen+2 {
+		return nil, ErrInputTooShort
+	}
+	cipherInput := rest[nonceLen+2:]
+
+	privateKey, err := c.parsePrivateKey(privatekey)
+	if err != nil {
+		return nil, fmt.Errorf("error parsing private key, error %w", err)
+	}
+
+	symmetricKey, err := rsa.DecryptOAEP(sha256.New(), c.randSource, privateKey, keyCipher, nil)
+	if err != nil {
+		return nil, fmt.Errorf("error decrypting key, error %w", err)
+	}
+
+	aed, err := c.createSymmetricAESGCM(symmetricKey)
+	if err != nil {
+		return nil, err
+	}
+
+	plaintext, err := aed.Open(nil, nonce, cipherInput, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return plaintext, nil
 }
 
 func (c *cryptoImpl) Sign(privatekey []byte, input []byte) ([]byte, error) {
@@ -195,3 +298,17 @@ func (c *cryptoImpl) base64StringToByte(input string) ([]byte, error) {
 // func (c *cryptoImpl) byteToBase64String(input []byte) string {
 // 	return base64.StdEncoding.EncodeToString(input)
 // }
+
+func (c *cryptoImpl) createSymmetricAESGCM(key []byte) (cipher.AEAD, error) {
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+
+	aed, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, err
+	}
+
+	return aed, nil
+}

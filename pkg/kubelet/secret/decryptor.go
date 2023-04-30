@@ -22,6 +22,7 @@ const (
 
 	interceptorKey = "/var/lib/kubelet/pki/interceptor-publickey.pem"
 
+	hybridKey        = "hybrid"
 	encryptedKey     = "encrypted"
 	shouldDecryptKey = "should-decrypt"
 	decryptedKey     = "decrypted"
@@ -197,6 +198,16 @@ func (d *decryptor) decrypt(oldSecret, newSecret *v1.Secret) (*v1.Secret, error)
 	klog.InfoS("decrypting secret", "name", newSecret.Name)
 	start := time.Now()
 
+	isHybridEncrypted := false
+	if isHybrid, exist := newSecret.Annotations[hybridKey]; exist && isHybrid == "true" {
+		isHybridEncrypted = true
+	}
+
+	decryptor := c.Decrypt
+	if isHybridEncrypted {
+		decryptor = c.HybridDecrypt
+	}
+
 	var (
 		wg     sync.WaitGroup
 		decErr []string
@@ -209,7 +220,7 @@ func (d *decryptor) decrypt(oldSecret, newSecret *v1.Secret) (*v1.Secret, error)
 			defer func() {
 				wg.Done()
 			}()
-			dec, err := c.Decrypt(nodePrivateKey, value)
+			dec, err := decryptor(nodePrivateKey, value)
 			// dec, err := c.Decrypt(nodePrivateKey2, value)
 			// dec, err := c.Decrypt(nodePrivateCombinedKey, value)
 			if err != nil {

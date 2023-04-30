@@ -19,6 +19,8 @@ type (
 		// - encrypt / decrypt
 		Encrypt(publickey []byte, input []byte) (output []byte, err error)
 		Decrypt(privatekey []byte, input []byte) (output []byte, err error)
+		HybridEncrypt(publickey []byte, input []byte) (output []byte, err error)
+		HybridDecrypt(privatekey []byte, input []byte) (output []byte, err error)
 
 		// - sign / verify
 		Sign(privatekey []byte, input []byte) (signature []byte, err error)

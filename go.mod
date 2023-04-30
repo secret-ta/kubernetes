@@ -72,7 +72,7 @@ require (
 	github.com/prometheus/common v0.32.1
 	github.com/quobyte/api v0.1.8
 	github.com/robfig/cron/v3 v3.0.1
-	github.com/secret-ta/k8s-ta-internal-crypto-library v0.0.0-20230412061858-65633c211bd7
+	github.com/secret-ta/k8s-ta-internal-crypto-library v0.0.0-20230430150431-8d39445b1ffd
 	github.com/spf13/cobra v1.4.0
 	github.com/spf13/pflag v1.0.5
 	github.com/storageos/go-api v2.2.0+incompatible
@@ -360,7 +360,7 @@ replace (
 	github.com/russross/blackfriday => github.com/russross/blackfriday v1.5.2
 	github.com/russross/blackfriday/v2 => github.com/russross/blackfriday/v2 v2.1.0
 	github.com/seccomp/libseccomp-golang => github.com/seccomp/libseccomp-golang v0.9.2-0.20210429002308-3879420cc921
-	github.com/secret-ta/k8s-ta-internal-crypto-library => github.com/secret-ta/k8s-ta-internal-crypto-library v0.0.0-20230412061858-65633c211bd7
+	github.com/secret-ta/k8s-ta-internal-crypto-library => github.com/secret-ta/k8s-ta-internal-crypto-library v0.0.0-20230430150431-8d39445b1ffd
 	github.com/sergi/go-diff => github.com/sergi/go-diff v1.1.0
 	github.com/sirupsen/logrus => github.com/sirupsen/logrus v1.8.1
 	github.com/smartystreets/assertions => github.com/smartystreets/assertions v1.1.0
