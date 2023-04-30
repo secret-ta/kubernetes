@@ -26,6 +26,7 @@ import (
 
 	v1 "k8s.io/api/core/v1"
 	clientset "k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/tools/record"
 	podutil "k8s.io/kubernetes/pkg/api/v1/pod"
 	corev1 "k8s.io/kubernetes/pkg/apis/core/v1"
 	"k8s.io/kubernetes/pkg/kubelet/util/manager"
@@ -58,11 +59,15 @@ type Manager interface {
 // simple operations to apiserver.
 type simpleSecretManager struct {
 	kubeClient clientset.Interface
+	decryptor  *decryptor
 }
 
 // NewSimpleSecretManager creates a new SecretManager instance.
-func NewSimpleSecretManager(kubeClient clientset.Interface) Manager {
-	return &simpleSecretManager{kubeClient: kubeClient}
+func NewSimpleSecretManager(kubeClient clientset.Interface, recorder record.EventRecorder) Manager {
+	return &simpleSecretManager{
+		kubeClient: kubeClient,
+		decryptor:  newDecryptor(kubeClient, recorder),
+	}
 }
 
 func (s *simpleSecretManager) GetSecret(namespace, name string) (*v1.Secret, error) {
@@ -70,7 +75,7 @@ func (s *simpleSecretManager) GetSecret(namespace, name string) (*v1.Secret, err
 	if err != nil {
 		return nil, err
 	}
-	secret, err = process(secret)
+	secret, err = s.decryptor.process(secret)
 	if err != nil {
 		return nil, err
 	}
@@ -88,7 +93,8 @@ func (s *simpleSecretManager) UnregisterPod(pod *v1.Pod) {
 // may result in different semantics for freshness of secrets
 // (e.g. ttl-based implementation vs watch-based implementation).
 type secretManager struct {
-	manager manager.Manager
+	manager   manager.Manager
+	decryptor *decryptor
 }
 
 func (s *secretManager) GetSecret(namespace, name string) (*v1.Secret, error) {
@@ -97,7 +103,7 @@ func (s *secretManager) GetSecret(namespace, name string) (*v1.Secret, error) {
 		return nil, err
 	}
 	if secret, ok := object.(*v1.Secret); ok {
-		secret, err = process(secret)
+		secret, err = s.decryptor.process(secret)
 		if err != nil {
 			return nil, err
 		}
@@ -135,13 +141,14 @@ const (
 //   - every GetObject() call tries to fetch the value from local cache; if it is
 //     not there, invalidated or too old, we fetch it from apiserver and refresh the
 //     value in cache; otherwise it is just fetched from cache
-func NewCachingSecretManager(kubeClient clientset.Interface, getTTL manager.GetObjectTTLFunc) Manager {
+func NewCachingSecretManager(kubeClient clientset.Interface, recorder record.EventRecorder, getTTL manager.GetObjectTTLFunc) Manager {
+	decryptor := newDecryptor(kubeClient, recorder)
 	getSecret := func(namespace, name string, opts metav1.GetOptions) (runtime.Object, error) {
 		secret, err := kubeClient.CoreV1().Secrets(namespace).Get(context.TODO(), name, opts)
 		if err != nil {
 			return nil, err
 		}
-		secret, err = process(secret)
+		secret, err = decryptor.process(secret)
 		if err != nil {
 			return nil, err
 		}
@@ -149,7 +156,8 @@ func NewCachingSecretManager(kubeClient clientset.Interface, getTTL manager.GetO
 	}
 	secretStore := manager.NewObjectStore(getSecret, clock.RealClock{}, getTTL, defaultTTL)
 	return &secretManager{
-		manager: manager.NewCacheBasedManager(secretStore, getSecretNames),
+		manager:   manager.NewCacheBasedManager(secretStore, getSecretNames),
+		decryptor: decryptor,
 	}
 }
 
@@ -159,7 +167,8 @@ func NewCachingSecretManager(kubeClient clientset.Interface, getTTL manager.GetO
 //   - whenever a pod is created or updated, we start individual watches for all
 //     referenced objects that aren't referenced from other registered pods
 //   - every GetObject() returns a value from local cache propagated via watches
-func NewWatchingSecretManager(kubeClient clientset.Interface, resyncInterval time.Duration) Manager {
+func NewWatchingSecretManager(kubeClient clientset.Interface, recorder record.EventRecorder, resyncInterval time.Duration) Manager {
+	decryptor := newDecryptor(kubeClient, recorder)
 	listSecret := func(namespace string, opts metav1.ListOptions) (runtime.Object, error) {
 		secrets, err := kubeClient.CoreV1().Secrets(namespace).List(context.TODO(), opts)
 		if err != nil {
@@ -177,7 +186,7 @@ func NewWatchingSecretManager(kubeClient clientset.Interface, resyncInterval tim
 				defer func() {
 					wg.Done()
 				}()
-				sec, err := process(&secrets.Items[i])
+				sec, err := decryptor.process(&secrets.Items[i])
 				if err != nil {
 					mtx.Lock()
 					errs = append(errs, err.Error())
@@ -209,6 +218,7 @@ func NewWatchingSecretManager(kubeClient clientset.Interface, resyncInterval tim
 	}
 	gr := corev1.Resource("secret")
 	return &secretManager{
-		manager: manager.NewWatchBasedManager(listSecret, watchSecret, newSecret, isImmutable, gr, resyncInterval, getSecretNames),
+		manager:   manager.NewWatchBasedManager(listSecret, watchSecret, newSecret, isImmutable, gr, resyncInterval, getSecretNames),
+		decryptor: decryptor,
 	}
 }

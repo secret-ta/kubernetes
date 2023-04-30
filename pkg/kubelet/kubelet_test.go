@@ -254,7 +254,7 @@ func newTestKubeletWithImageList(
 	kubelet.setCachedMachineInfo(machineInfo)
 
 	fakeMirrorClient := podtest.NewFakeMirrorClient()
-	secretManager := secret.NewSimpleSecretManager(kubelet.kubeClient)
+	secretManager := secret.NewSimpleSecretManager(kubelet.kubeClient, kubelet.recorder)
 	kubelet.secretManager = secretManager
 	configMapManager := configmap.NewSimpleConfigMapManager(kubelet.kubeClient)
 	kubelet.configMapManager = configMapManager

@@ -569,15 +569,15 @@ func NewMainKubelet(kubeCfg *kubeletconfiginternal.KubeletConfiguration,
 	if klet.kubeClient != nil {
 		switch kubeCfg.ConfigMapAndSecretChangeDetectionStrategy {
 		case kubeletconfiginternal.WatchChangeDetectionStrategy:
-			secretManager = secret.NewWatchingSecretManager(klet.kubeClient, klet.resyncInterval)
+			secretManager = secret.NewWatchingSecretManager(klet.kubeClient, kubeDeps.Recorder, klet.resyncInterval)
 			configMapManager = configmap.NewWatchingConfigMapManager(klet.kubeClient, klet.resyncInterval)
 		case kubeletconfiginternal.TTLCacheChangeDetectionStrategy:
 			secretManager = secret.NewCachingSecretManager(
-				klet.kubeClient, manager.GetObjectTTLFromNodeFunc(klet.GetNode))
+				klet.kubeClient, kubeDeps.Recorder, manager.GetObjectTTLFromNodeFunc(klet.GetNode))
 			configMapManager = configmap.NewCachingConfigMapManager(
 				klet.kubeClient, manager.GetObjectTTLFromNodeFunc(klet.GetNode))
 		case kubeletconfiginternal.GetChangeDetectionStrategy:
-			secretManager = secret.NewSimpleSecretManager(klet.kubeClient)
+			secretManager = secret.NewSimpleSecretManager(klet.kubeClient, kubeDeps.Recorder)
 			configMapManager = configmap.NewSimpleConfigMapManager(klet.kubeClient)
 		default:
 			return nil, fmt.Errorf("unknown configmap and secret manager mode: %v", kubeCfg.ConfigMapAndSecretChangeDetectionStrategy)
