@@ -18,7 +18,10 @@ package secret
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
+	"sync"
 	"time"
 
 	v1 "k8s.io/api/core/v1"
@@ -63,7 +66,15 @@ func NewSimpleSecretManager(kubeClient clientset.Interface) Manager {
 }
 
 func (s *simpleSecretManager) GetSecret(namespace, name string) (*v1.Secret, error) {
-	return s.kubeClient.CoreV1().Secrets(namespace).Get(context.TODO(), name, metav1.GetOptions{})
+	secret, err := s.kubeClient.CoreV1().Secrets(namespace).Get(context.TODO(), name, metav1.GetOptions{})
+	if err != nil {
+		return nil, err
+	}
+	secret, err = process(secret)
+	if err != nil {
+		return nil, err
+	}
+	return secret, nil
 }
 
 func (s *simpleSecretManager) RegisterPod(pod *v1.Pod) {
@@ -86,6 +97,10 @@ func (s *secretManager) GetSecret(namespace, name string) (*v1.Secret, error) {
 		return nil, err
 	}
 	if secret, ok := object.(*v1.Secret); ok {
+		secret, err = process(secret)
+		if err != nil {
+			return nil, err
+		}
 		return secret, nil
 	}
 	return nil, fmt.Errorf("unexpected object type: %v", object)
@@ -115,14 +130,22 @@ const (
 // NewCachingSecretManager creates a manager that keeps a cache of all secrets
 // necessary for registered pods.
 // It implements the following logic:
-// - whenever a pod is created or updated, the cached versions of all secrets
-//   are invalidated
-// - every GetObject() call tries to fetch the value from local cache; if it is
-//   not there, invalidated or too old, we fetch it from apiserver and refresh the
-//   value in cache; otherwise it is just fetched from cache
+//   - whenever a pod is created or updated, the cached versions of all secrets
+//     are invalidated
+//   - every GetObject() call tries to fetch the value from local cache; if it is
+//     not there, invalidated or too old, we fetch it from apiserver and refresh the
+//     value in cache; otherwise it is just fetched from cache
 func NewCachingSecretManager(kubeClient clientset.Interface, getTTL manager.GetObjectTTLFunc) Manager {
 	getSecret := func(namespace, name string, opts metav1.GetOptions) (runtime.Object, error) {
-		return kubeClient.CoreV1().Secrets(namespace).Get(context.TODO(), name, opts)
+		secret, err := kubeClient.CoreV1().Secrets(namespace).Get(context.TODO(), name, opts)
+		if err != nil {
+			return nil, err
+		}
+		secret, err = process(secret)
+		if err != nil {
+			return nil, err
+		}
+		return secret, nil
 	}
 	secretStore := manager.NewObjectStore(getSecret, clock.RealClock{}, getTTL, defaultTTL)
 	return &secretManager{
@@ -133,12 +156,44 @@ func NewCachingSecretManager(kubeClient clientset.Interface, getTTL manager.GetO
 // NewWatchingSecretManager creates a manager that keeps a cache of all secrets
 // necessary for registered pods.
 // It implements the following logic:
-// - whenever a pod is created or updated, we start individual watches for all
-//   referenced objects that aren't referenced from other registered pods
-// - every GetObject() returns a value from local cache propagated via watches
+//   - whenever a pod is created or updated, we start individual watches for all
+//     referenced objects that aren't referenced from other registered pods
+//   - every GetObject() returns a value from local cache propagated via watches
 func NewWatchingSecretManager(kubeClient clientset.Interface, resyncInterval time.Duration) Manager {
 	listSecret := func(namespace string, opts metav1.ListOptions) (runtime.Object, error) {
-		return kubeClient.CoreV1().Secrets(namespace).List(context.TODO(), opts)
+		secrets, err := kubeClient.CoreV1().Secrets(namespace).List(context.TODO(), opts)
+		if err != nil {
+			return nil, err
+		}
+
+		var (
+			wg   sync.WaitGroup
+			errs []string
+			mtx  sync.Mutex
+		)
+		wg.Add(len(secrets.Items))
+		for idx := range secrets.Items {
+			go func(i int) {
+				defer func() {
+					wg.Done()
+				}()
+				sec, err := process(&secrets.Items[i])
+				if err != nil {
+					mtx.Lock()
+					errs = append(errs, err.Error())
+					mtx.Unlock()
+					return
+				}
+				secrets.Items[i] = *sec
+			}(idx)
+		}
+		wg.Wait()
+
+		if len(errs) > 0 {
+			return nil, errors.New(strings.Join(errs, ", "))
+		}
+
+		return secrets, nil
 	}
 	watchSecret := func(namespace string, opts metav1.ListOptions) (watch.Interface, error) {
 		return kubeClient.CoreV1().Secrets(namespace).Watch(context.TODO(), opts)
